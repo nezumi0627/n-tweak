@@ -1,0 +1,9 @@
+Package: com.nezu.line-tweak
+Name: NezuTweak for LINE
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: LINE tweak with Mod Menu — About panel
+Maintainer: nezu
+Author: nezu
+Section: Tweaks
+Depends: mobilesubstrate | substrate-inserter | libhooker | ellekit
