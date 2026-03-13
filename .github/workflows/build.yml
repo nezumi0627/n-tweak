@@ -20,7 +20,6 @@ jobs:
         uses: actions/checkout@v4
 
       # ── ldid をインストール ────────────────────────────────────────
-      # Theos の署名ステップに必要。macOS ランナーには入っていない。
       - name: Install ldid
         run: brew install ldid
 
@@ -40,7 +39,7 @@ jobs:
           git clone --recursive --depth 1 \
             https://github.com/theos/theos.git "$THEOS"
 
-      # ── SDK を git clone で直接取得 (api.github.com を使わない) ───
+      # ── SDK を git clone で直接取得 ───────────────────────────────
       - name: Clone iOS SDKs
         if: steps.cache-theos.outputs.cache-hit != 'true'
         env:
@@ -66,28 +65,24 @@ jobs:
       - name: Build NezuTweak.dylib
         run: make -j$(sysctl -n hw.ncpu)
 
-      # ── LC_ID_DYLIB を @loader_path に正規化 ──────────────────────
-      - name: Fix LC_ID_DYLIB for LiveContainer
+      # ── LC_ID_DYLIB を @loader_path に正規化 + dist/ へ収集 ───────
+      # Theos は .theos/obj/debug/ に dylib を生成する
+      # find の除外に ./dist を加えて「コピー先 → コピー元」の自己参照を防ぐ
+      - name: Collect & fix dylib
         run: |
-          DYLIB=$(find .theos obj -name "NezuTweak.dylib" 2>/dev/null | head -1)
+          DYLIB=$(find .theos -name "NezuTweak.dylib" 2>/dev/null | head -1)
           if [ -z "$DYLIB" ]; then
-            DYLIB=$(find . -name "NezuTweak.dylib" \
-              ! -path "$THEOS/*" ! -path "./.build/intermediates/*" | head -1)
-          fi
-          if [ -z "$DYLIB" ]; then
-            echo "::error::NezuTweak.dylib not found"; exit 1
+            echo "::error::NezuTweak.dylib not found in .theos/"; exit 1
           fi
           echo "Found: $DYLIB"
+
           install_name_tool -id "@loader_path/NezuTweak.dylib" "$DYLIB"
+          echo "=== LC_ID_DYLIB ==="
           otool -D "$DYLIB"
 
-      # ── 成果物を dist/ に集める ───────────────────────────────────
-      - name: Collect artifact
-        run: |
           mkdir -p dist
-          find . -name "NezuTweak.dylib" \
-            ! -path "$THEOS/*" ! -path "./.build/intermediates/*" \
-            -exec cp {} dist/NezuTweak.dylib \;
+          cp "$DYLIB" dist/NezuTweak.dylib
+
           echo "=== Mach-O info ==="
           otool -l dist/NezuTweak.dylib | grep -A2 "LC_ID_DYLIB"
           file dist/NezuTweak.dylib
