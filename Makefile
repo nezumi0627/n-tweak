@@ -20,11 +20,11 @@ NezuTweak_CFLAGS     = -fobjc-arc \
                         -I$(THEOS_PROJECT_DIR)/Sources/NezuTweak \
                         -DNZ_LIVECONTAINER=1
 
-NezuTweak_FRAMEWORKS = UIKit Foundation CoreGraphics ObjectiveC
-
-# ElleKit / CydiaSubstrate には依存しない (LC環境では存在しないため)
-# フックは純粋な ObjC runtime API で行う
-NezuTweak_LIBRARIES  =
+# ObjectiveC はフレームワーク名ではなく libobjc.tbd にリンクする
+# UIKit が objc_msgSend 等を再エクスポートするため明示不要だが
+# objc/runtime.h を使う場合は _LIBRARIES で libobjc を指定する
+NezuTweak_FRAMEWORKS = UIKit Foundation CoreGraphics
+NezuTweak_LIBRARIES  = objc
 
 include $(THEOS)/makefiles/library.mk
 
