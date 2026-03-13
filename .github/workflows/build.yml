@@ -1,4 +1,4 @@
-name: Build NezuTweak
+name: Build NezuTweak.dylib (LiveContainer)
 
 on:
   push:
@@ -8,6 +8,9 @@ on:
   release:
     types: [created]
 
+env:
+  THEOS: ${{ github.workspace }}/theos
+
 jobs:
   build:
     runs-on: macos-latest
@@ -16,27 +19,87 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Theos
-        run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-        env:
-          THEOS: ${{ github.workspace }}/theos
+      # ── Theos + SDK をキャッシュ ───────────────────────────────────
+      - name: Cache Theos
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-${{ hashFiles('.github/theos-rev') }}
+          restore-keys: theos-${{ runner.os }}-
 
-      - name: Build .deb
+      # ── Theos 本体を clone (キャッシュミス時のみ) ─────────────────
+      - name: Clone Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
-          export THEOS=${{ github.workspace }}/theos
-          make package FINALPACKAGE=1
-        env:
-          THEOS: ${{ github.workspace }}/theos
+          git clone --recursive --depth 1 \
+            https://github.com/theos/theos.git "$THEOS"
 
-      - name: Upload .deb artifact
+      # ── SDK を git clone で直接取得 (api.github.com を使わない) ───
+      # install-theos の SDK ダウンロードは GitHub API を叩くため失敗する。
+      # theos/sdks リポジトリを直接 clone することで回避する。
+      # GITHUB_TOKEN で認証するとレート制限が 60 → 5000 req/h に緩和される。
+      - name: Clone iOS SDKs
+        if: steps.cache-theos.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            https://x-access-token:${GH_TOKEN}@github.com/theos/sdks.git \
+            /tmp/theos-sdks
+
+          mkdir -p "$THEOS/sdks"
+
+          # Makefile の TARGET に合わせて iPhoneOS16.5.sdk を優先コピー
+          if [ -d /tmp/theos-sdks/iPhoneOS16.5.sdk ]; then
+            cp -R /tmp/theos-sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"
+          else
+            # 存在する最新の iPhoneOS SDK を使う
+            LATEST=$(ls -d /tmp/theos-sdks/iPhoneOS*.sdk 2>/dev/null | sort -V | tail -1)
+            [ -n "$LATEST" ] && cp -R "$LATEST" "$THEOS/sdks/"
+          fi
+
+          echo "=== installed SDKs ==="
+          ls "$THEOS/sdks/"
+
+      # ── ビルド ────────────────────────────────────────────────────
+      - name: Build NezuTweak.dylib
+        run: make -j$(sysctl -n hw.ncpu)
+
+      # ── LC_ID_DYLIB を @loader_path に正規化 ──────────────────────
+      - name: Fix LC_ID_DYLIB for LiveContainer
+        run: |
+          DYLIB=$(find .theos obj -name "NezuTweak.dylib" 2>/dev/null | head -1)
+          if [ -z "$DYLIB" ]; then
+            DYLIB=$(find . -name "NezuTweak.dylib" \
+              ! -path "$THEOS/*" ! -path "./.build/intermediates/*" | head -1)
+          fi
+          if [ -z "$DYLIB" ]; then
+            echo "::error::NezuTweak.dylib not found"; exit 1
+          fi
+          echo "Found: $DYLIB"
+          install_name_tool -id "@loader_path/NezuTweak.dylib" "$DYLIB"
+          otool -D "$DYLIB"
+
+      # ── 成果物を dist/ に集める ───────────────────────────────────
+      - name: Collect artifact
+        run: |
+          mkdir -p dist
+          find . -name "NezuTweak.dylib" \
+            ! -path "$THEOS/*" ! -path "./.build/intermediates/*" \
+            -exec cp {} dist/NezuTweak.dylib \;
+          echo "=== Mach-O info ==="
+          otool -l dist/NezuTweak.dylib | grep -A2 "LC_ID_DYLIB"
+          file dist/NezuTweak.dylib
+
+      - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NezuTweak-deb
-          path: packages/*.deb
+          name: NezuTweak-dylib
+          path: dist/NezuTweak.dylib
 
       - name: Attach to Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: packages/*.deb
+          files: dist/NezuTweak.dylib

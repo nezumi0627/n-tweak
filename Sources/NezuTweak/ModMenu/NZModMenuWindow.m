@@ -1,22 +1,28 @@
 // NZModMenuWindow.m
-// NezuTweak — LINE ModMenu 実装
+// NezuTweak — LiveContainer 対応 ModMenu 実装
+//
+// LiveContainer 固有の考慮事項:
+//   - NSBundle.mainBundle はゲストアプリに差し替えられている
+//   - UIWindowScene の取得タイミングに注意
+//   - UIWindow.windowLevel は LCのウィンドウより上にする必要がある
+//   - @loader_path 環境で動作 (絶対パスは使わない)
 
 #import "NZModMenuWindow.h"
 #import "NZMenuButton.h"
 #import "NZAboutViewController.h"
 
-// ─── カラーパレット ────────────────────────────────────────────
+// ─── カラーパレット ────────────────────────────────────────────────
 #define NZ_BG_COLOR      [UIColor colorWithRed:0.10 green:0.10 blue:0.14 alpha:0.95]
 #define NZ_ACCENT_COLOR  [UIColor colorWithRed:0.00 green:0.80 blue:0.47 alpha:1.00]
 #define NZ_CELL_COLOR    [UIColor colorWithRed:0.15 green:0.15 blue:0.20 alpha:1.00]
 #define NZ_TEXT_COLOR    [UIColor whiteColor]
 #define NZ_SUB_COLOR     [UIColor colorWithWhite:0.60 alpha:1.00]
 
-static const CGFloat kMenuWidth     = 280.0;
-static const CGFloat kRowHeight     = 50.0;
-static const CGFloat kHeaderHeight  = 56.0;
-static const CGFloat kCornerRadius  = 14.0;
-static const CGFloat kButtonSize    = 54.0;
+static const CGFloat kMenuWidth    = 280.0;
+static const CGFloat kRowHeight    = 50.0;
+static const CGFloat kHeaderHeight = 56.0;
+static const CGFloat kCornerRadius = 14.0;
+static const CGFloat kButtonSize   = 54.0;
 
 // ──────────────────────────────────────────────────────────────────
 #pragma mark - NZMenuItem
@@ -24,10 +30,10 @@ static const CGFloat kButtonSize    = 54.0;
 @implementation NZMenuItem
 
 + (instancetype)buttonWithTitle:(NSString *)title action:(void(^)(void))action {
-    NZMenuItem *item  = [NZMenuItem new];
-    item.title        = title;
-    item.type         = NZMenuItemTypeButton;
-    item.action       = action;
+    NZMenuItem *item = [NZMenuItem new];
+    item.title = title;
+    item.type  = NZMenuItemTypeButton;
+    item.action = action;
     return item;
 }
 
@@ -42,7 +48,7 @@ static const CGFloat kButtonSize    = 54.0;
 
 + (instancetype)separator {
     NZMenuItem *item = [NZMenuItem new];
-    item.type        = NZMenuItemTypeSeparator;
+    item.type = NZMenuItemTypeSeparator;
     return item;
 }
 
@@ -53,7 +59,7 @@ static const CGFloat kButtonSize    = 54.0;
 
 @interface NZMenuTableCell : UITableViewCell
 @property (nonatomic, strong) UISwitch *toggle;
-@property (nonatomic, copy) void (^toggleAction)(BOOL);
+@property (nonatomic, copy)   void (^toggleAction)(BOOL);
 @end
 
 @implementation NZMenuTableCell
@@ -61,23 +67,21 @@ static const CGFloat kButtonSize    = 54.0;
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
     self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
     if (self) {
-        self.backgroundColor          = NZ_CELL_COLOR;
-        self.textLabel.textColor      = NZ_TEXT_COLOR;
-        self.textLabel.font           = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-        self.selectionStyle           = UITableViewCellSelectionStyleNone;
-
-        // 選択ハイライト色
-        UIView *selected      = [UIView new];
-        selected.backgroundColor     = [UIColor colorWithWhite:1 alpha:0.06];
-        self.selectedBackgroundView  = selected;
+        self.backgroundColor         = NZ_CELL_COLOR;
+        self.textLabel.textColor     = NZ_TEXT_COLOR;
+        self.textLabel.font          = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+        self.selectionStyle          = UITableViewCellSelectionStyleNone;
+        UIView *sel                  = [UIView new];
+        sel.backgroundColor          = [UIColor colorWithWhite:1 alpha:0.06];
+        self.selectedBackgroundView  = sel;
     }
     return self;
 }
 
 - (void)addSwitch {
-    self.toggle                        = [[UISwitch alloc] init];
-    self.toggle.onTintColor            = NZ_ACCENT_COLOR;
-    self.toggle.transform              = CGAffineTransformMakeScale(0.80, 0.80);
+    self.toggle           = [[UISwitch alloc] init];
+    self.toggle.onTintColor = NZ_ACCENT_COLOR;
+    self.toggle.transform = CGAffineTransformMakeScale(0.80, 0.80);
     [self.toggle addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     self.accessoryView = self.toggle;
 }
@@ -94,7 +98,7 @@ static const CGFloat kButtonSize    = 54.0;
 @interface NZMenuPanelView : UIView <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) NSMutableArray<NZMenuItem *> *items;
 @property (nonatomic, strong) UITableView *tableView;
-@property (nonatomic, copy) void (^onClose)(void);
+@property (nonatomic, copy)   void (^onClose)(void);
 @end
 
 @implementation NZMenuPanelView
@@ -107,15 +111,11 @@ static const CGFloat kButtonSize    = 54.0;
         self.items           = [items mutableCopy];
         self.backgroundColor = NZ_BG_COLOR;
         self.layer.cornerRadius = kCornerRadius;
-        self.clipsToBounds   = YES;
-
-        // 影
+        self.clipsToBounds   = NO;
         self.layer.shadowColor   = UIColor.blackColor.CGColor;
         self.layer.shadowOpacity = 0.45;
         self.layer.shadowOffset  = CGSizeMake(0, 6);
         self.layer.shadowRadius  = 16;
-        self.clipsToBounds       = NO; // 影のために NO
-
         [self buildHeader];
         [self buildTableView];
     }
@@ -123,26 +123,30 @@ static const CGFloat kButtonSize    = 54.0;
 }
 
 - (void)buildHeader {
-    // アクセントバー
     UIView *bar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kMenuWidth, 3)];
     bar.backgroundColor = NZ_ACCENT_COLOR;
     [self addSubview:bar];
 
-    // タイトルラベル
+    // マスクで角丸を復元（clipsToBounds=NO なので手動で上角だけ丸める）
+    UIBezierPath *maskPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds
+        byRoundingCorners:UIRectCornerTopLeft | UIRectCornerTopRight
+              cornerRadii:CGSizeMake(kCornerRadius, kCornerRadius)];
+    CAShapeLayer *maskLayer = [CAShapeLayer layer];
+    maskLayer.path = maskPath.CGPath;
+    bar.layer.mask = maskLayer;
+
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 3, kMenuWidth - 80, kHeaderHeight - 3)];
     title.text      = @"⚡ NezuTweak";
     title.textColor = NZ_TEXT_COLOR;
     title.font      = [UIFont systemFontOfSize:17 weight:UIFontWeightBold];
     [self addSubview:title];
 
-    // サブタイトル
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(16, 30, kMenuWidth - 80, 20)];
-    sub.text      = @"LINE Tweak v0.1";
+    sub.text      = @"LINE Tweak  •  LC";
     sub.textColor = NZ_SUB_COLOR;
     sub.font      = [UIFont systemFontOfSize:11 weight:UIFontWeightRegular];
     [self addSubview:sub];
 
-    // 閉じるボタン
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.frame     = CGRectMake(kMenuWidth - 50, 12, 36, 36);
     [close setTitle:@"✕" forState:UIControlStateNormal];
@@ -151,28 +155,32 @@ static const CGFloat kButtonSize    = 54.0;
     [close addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:close];
 
-    // 区切り線
     UIView *div = [[UIView alloc] initWithFrame:CGRectMake(0, kHeaderHeight - 0.5, kMenuWidth, 0.5)];
     div.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10];
     [self addSubview:div];
 }
 
 - (void)buildTableView {
-    CGRect tvFrame = CGRectMake(0, kHeaderHeight, kMenuWidth, self.bounds.size.height - kHeaderHeight);
-    self.tableView  = [[UITableView alloc] initWithFrame:tvFrame style:UITableViewStylePlain];
-    self.tableView.dataSource        = self;
-    self.tableView.delegate          = self;
-    self.tableView.backgroundColor   = UIColor.clearColor;
-    self.tableView.separatorColor    = [UIColor colorWithWhite:1 alpha:0.08];
-    self.tableView.separatorInset    = UIEdgeInsetsMake(0, 16, 0, 0);
-    self.tableView.rowHeight         = kRowHeight;
+    CGRect tvFrame = CGRectMake(0, kHeaderHeight, kMenuWidth,
+                                self.bounds.size.height - kHeaderHeight);
+    self.tableView = [[UITableView alloc] initWithFrame:tvFrame style:UITableViewStylePlain];
+    self.tableView.dataSource     = self;
+    self.tableView.delegate       = self;
+    self.tableView.backgroundColor = UIColor.clearColor;
+    self.tableView.separatorColor = [UIColor colorWithWhite:1 alpha:0.08];
+    self.tableView.separatorInset = UIEdgeInsetsMake(0, 16, 0, 0);
+    self.tableView.rowHeight      = kRowHeight;
     self.tableView.showsVerticalScrollIndicator = NO;
+
+    // 下角を丸くする
+    self.tableView.layer.cornerRadius   = kCornerRadius;
+    self.tableView.layer.maskedCorners  =
+        kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    self.tableView.clipsToBounds        = YES;
     [self addSubview:self.tableView];
 }
 
-- (void)closeTapped {
-    if (self.onClose) self.onClose();
-}
+- (void)closeTapped { if (self.onClose) self.onClose(); }
 
 #pragma mark UITableViewDataSource / Delegate
 
@@ -184,24 +192,24 @@ static const CGFloat kButtonSize    = 54.0;
     NZMenuItem *item = self.items[ip.row];
 
     if (item.type == NZMenuItemTypeSeparator) {
-        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-        cell.backgroundColor  = NZ_BG_COLOR;
+        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                       reuseIdentifier:nil];
+        cell.backgroundColor        = NZ_BG_COLOR;
         cell.userInteractionEnabled = NO;
-        UIView *line = [[UIView alloc] initWithFrame:CGRectMake(16, kRowHeight/2, kMenuWidth - 32, 0.5)];
+        UIView *line = [[UIView alloc] initWithFrame:CGRectMake(16, kRowHeight/2,
+                                                               kMenuWidth - 32, 0.5)];
         line.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
         [cell.contentView addSubview:line];
         return cell;
     }
 
     NZMenuTableCell *cell = [tv dequeueReusableCellWithIdentifier:@"NZCell"];
-    if (!cell) cell = [[NZMenuTableCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"NZCell"];
-
-    // アクセサリーをリセット
+    if (!cell) cell = [[NZMenuTableCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                             reuseIdentifier:@"NZCell"];
     cell.accessoryView = nil;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.toggle        = nil;
     cell.toggleAction  = nil;
-
     cell.textLabel.text = item.title;
 
     if (item.type == NZMenuItemTypeSwitch) {
@@ -212,10 +220,8 @@ static const CGFloat kButtonSize    = 54.0;
             if (item.toggleAction) item.toggleAction(on);
         };
     } else {
-        // ボタンタイプ — 右矢印
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     }
-
     return cell;
 }
 
@@ -225,9 +231,7 @@ static const CGFloat kButtonSize    = 54.0;
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
     NZMenuItem *item = self.items[ip.row];
-    if (item.type == NZMenuItemTypeButton && item.action) {
-        item.action();
-    }
+    if (item.type == NZMenuItemTypeButton && item.action) item.action();
     [tv deselectRowAtIndexPath:ip animated:YES];
 }
 
@@ -237,82 +241,111 @@ static const CGFloat kButtonSize    = 54.0;
 #pragma mark - NZModMenuWindow
 
 @interface NZModMenuWindow ()
-@property (nonatomic, strong) NZMenuButton      *floatButton;
-@property (nonatomic, strong) NZMenuPanelView   *panel;
+@property (nonatomic, strong) NZMenuButton    *floatButton;
+@property (nonatomic, strong) NZMenuPanelView *panel;
 @property (nonatomic, strong) NSMutableArray<NZMenuItem *> *menuItems;
-@property (nonatomic, assign) BOOL               isPanelVisible;
+@property (nonatomic, assign) BOOL             isPanelVisible;
 @end
 
 @implementation NZModMenuWindow
+
+// ─── LiveContainer 対応: UIWindowScene を安全に取得 ───────────────
++ (UIWindowScene *)activeWindowScene {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]] &&
+            scene.activationState == UISceneActivationStateForegroundActive) {
+            return (UIWindowScene *)scene;
+        }
+    }
+    // フォールバック: 最初の UIWindowScene
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) {
+            return (UIWindowScene *)scene;
+        }
+    }
+    return nil;
+}
 
 + (instancetype)sharedWindow {
     static NZModMenuWindow *instance;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        UIWindowScene *scene = nil;
-        for (UIWindowScene *s in [UIApplication sharedApplication].connectedScenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) { scene = s; break; }
-        }
+        UIWindowScene *scene = [self activeWindowScene];
         if (scene) {
             instance = [[NZModMenuWindow alloc] initWithWindowScene:scene];
         } else {
+            // LC環境で scene がまだない場合の最終フォールバック
             instance = [[NZModMenuWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
         }
-        instance.windowLevel             = UIWindowLevelAlert + 100;
-        instance.backgroundColor         = UIColor.clearColor;
-        instance.rootViewController      = [UIViewController new];
+        // LC の UI ウィンドウより確実に上に表示
+        instance.windowLevel            = UIWindowLevelAlert + 200;
+        instance.backgroundColor        = UIColor.clearColor;
+        instance.rootViewController     = [UIViewController new];
         instance.rootViewController.view.backgroundColor = UIColor.clearColor;
-        instance.userInteractionEnabled  = YES;
-        instance.menuItems               = [NSMutableArray array];
+        instance.userInteractionEnabled = YES;
+        // LC の multitask ウィンドウと干渉しないようにする
+        if (@available(iOS 13.0, *)) {
+            instance.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+        }
     });
     return instance;
 }
 
-// ─── デフォルトメニュー項目をセット ──────────────────────────────
+// ─── デフォルトメニュー項目 ───────────────────────────────────────
 - (void)setupDefaultItems {
     __weak typeof(self) ws = self;
 
-    // About
     [self addItem:[NZMenuItem buttonWithTitle:@"ℹ️  About NezuTweak" action:^{
         [ws showAbout];
     }]];
-
     [self addItem:[NZMenuItem separator]];
-
-    // ダミースイッチ（将来の機能用プレースホルダー）
-    [self addItem:[NZMenuItem switchWithTitle:@"🔇 既読スキップ (準備中)" on:NO toggle:^(BOOL on) {
-        // TODO: 実装
-    }]];
-
-    [self addItem:[NZMenuItem switchWithTitle:@"👁  オンライン非表示 (準備中)" on:NO toggle:^(BOOL on) {
-        // TODO: 実装
-    }]];
+    [self addItem:[NZMenuItem switchWithTitle:@"🔇 既読スキップ (準備中)" on:NO toggle:^(BOOL on) {}]];
+    [self addItem:[NZMenuItem switchWithTitle:@"👁  オンライン非表示 (準備中)" on:NO toggle:^(BOOL on) {}]];
+    [self addItem:[NZMenuItem switchWithTitle:@"📸 ステルス閲覧 (準備中)" on:NO toggle:^(BOOL on) {}]];
 }
 
-// ─── 公開API ─────────────────────────────────────────────────────
-- (void)addItem:(NZMenuItem *)item {
-    [self.menuItems addObject:item];
-}
+// ─── 公開 API ─────────────────────────────────────────────────────
+- (void)addItem:(NZMenuItem *)item { [self.menuItems addObject:item]; }
 
 - (void)show {
-    if (self.menuItems.count == 0) {
-        [self setupDefaultItems];
+    if (!self.menuItems) self.menuItems = [NSMutableArray array];
+    if (self.menuItems.count == 0) [self setupDefaultItems];
+
+    // LC環境で scene が後から確定する場合に再アタッチ
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = [NZModMenuWindow activeWindowScene];
+        if (scene && self.windowScene != scene) {
+            self.windowScene = scene;
+        }
     }
+
     [self makeKeyAndVisible];
     [self buildFloatButton];
+    NSLog(@"[NezuTweak] 🎯 ModMenu visible");
 }
 
 // ─── フローティングボタン ─────────────────────────────────────────
 - (void)buildFloatButton {
     if (self.floatButton) return;
 
-    CGFloat x = UIScreen.mainScreen.bounds.size.width - kButtonSize - 12;
+    // セーフエリアを考慮した初期位置
+    CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
+    CGFloat x = screenW - kButtonSize - 12;
     CGFloat y = 120;
-    self.floatButton = [[NZMenuButton alloc] initWithFrame:CGRectMake(x, y, kButtonSize, kButtonSize)];
-    [self.floatButton addTarget:self action:@selector(floatButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 
-    // ドラッグ
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+    // ノッチ / Dynamic Island を避ける
+    if (@available(iOS 11.0, *)) {
+        UIEdgeInsets insets = UIApplication.sharedApplication.keyWindow.safeAreaInsets;
+        if (insets.top > 20) y = insets.top + 60;
+    }
+
+    self.floatButton = [[NZMenuButton alloc]
+        initWithFrame:CGRectMake(x, y, kButtonSize, kButtonSize)];
+    [self.floatButton addTarget:self action:@selector(floatButtonTapped)
+               forControlEvents:UIControlEventTouchUpInside];
+
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(handleDrag:)];
     [self.floatButton addGestureRecognizer:pan];
 
     [self.rootViewController.view addSubview:self.floatButton];
@@ -330,21 +363,22 @@ static const CGFloat kButtonSize    = 54.0;
     __weak typeof(self) ws = self;
     self.panel.onClose = ^{ [ws hidePanel]; };
 
-    // ボタン位置に合わせて配置
     CGFloat btnMidY = CGRectGetMidY(self.floatButton.frame);
     CGFloat px      = self.floatButton.frame.origin.x - kMenuWidth - 8;
     if (px < 8) px  = self.floatButton.frame.origin.x + kButtonSize + 8;
     CGFloat py      = btnMidY - self.panel.bounds.size.height / 2;
     py = MAX(py, 20);
-    CGFloat maxY    = UIScreen.mainScreen.bounds.size.height - self.panel.bounds.size.height - 20;
+    CGFloat maxY = UIScreen.mainScreen.bounds.size.height - self.panel.bounds.size.height - 20;
     py = MIN(py, maxY);
 
-    self.panel.frame  = CGRectMake(px, py, kMenuWidth, self.panel.bounds.size.height);
-    self.panel.alpha  = 0;
+    self.panel.frame     = CGRectMake(px, py, kMenuWidth, self.panel.bounds.size.height);
+    self.panel.alpha     = 0;
     self.panel.transform = CGAffineTransformMakeScale(0.92, 0.92);
     [self.rootViewController.view addSubview:self.panel];
 
-    [UIView animateWithDuration:0.22 delay:0 usingSpringWithDamping:0.78 initialSpringVelocity:0.5 options:0 animations:^{
+    [UIView animateWithDuration:0.22 delay:0
+         usingSpringWithDamping:0.78 initialSpringVelocity:0.5
+                        options:0 animations:^{
         self.panel.alpha     = 1;
         self.panel.transform = CGAffineTransformIdentity;
     } completion:nil];
@@ -363,29 +397,29 @@ static const CGFloat kButtonSize    = 54.0;
     }];
 }
 
-// ─── ドラッグ ─────────────────────────────────────────────────────
+// ─── ドラッグ & 端スナップ ────────────────────────────────────────
 - (void)handleDrag:(UIPanGestureRecognizer *)pan {
     CGPoint delta = [pan translationInView:self.rootViewController.view];
     [pan setTranslation:CGPointZero inView:self.rootViewController.view];
 
-    CGRect f  = self.floatButton.frame;
-    f.origin.x += delta.x;
-    f.origin.y += delta.y;
+    CGRect f     = self.floatButton.frame;
+    f.origin.x  += delta.x;
+    f.origin.y  += delta.y;
 
     CGFloat maxX = UIScreen.mainScreen.bounds.size.width  - kButtonSize - 4;
     CGFloat maxY = UIScreen.mainScreen.bounds.size.height - kButtonSize - 4;
     f.origin.x   = MAX(4, MIN(f.origin.x, maxX));
     f.origin.y   = MAX(40, MIN(f.origin.y, maxY));
-
     self.floatButton.frame = f;
 
     if (pan.state == UIGestureRecognizerStateEnded) {
-        // 画面端にスナップ
         CGFloat cx     = CGRectGetMidX(f);
         CGFloat target = cx < UIScreen.mainScreen.bounds.size.width / 2 ? 4 : maxX;
-        [UIView animateWithDuration:0.25 delay:0 usingSpringWithDamping:0.75 initialSpringVelocity:0.3 options:0 animations:^{
-            CGRect nf      = self.floatButton.frame;
-            nf.origin.x    = target;
+        [UIView animateWithDuration:0.25 delay:0
+             usingSpringWithDamping:0.75 initialSpringVelocity:0.3
+                            options:0 animations:^{
+            CGRect nf    = self.floatButton.frame;
+            nf.origin.x  = target;
             self.floatButton.frame = nf;
         } completion:nil];
     }
@@ -394,9 +428,10 @@ static const CGFloat kButtonSize    = 54.0;
 // ─── About 表示 ───────────────────────────────────────────────────
 - (void)showAbout {
     [self hidePanel];
-    NZAboutViewController *vc = [NZAboutViewController new];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    nav.modalPresentationStyle  = UIModalPresentationPageSheet;
+    NZAboutViewController *vc  = [NZAboutViewController new];
+    UINavigationController *nav = [[UINavigationController alloc]
+        initWithRootViewController:vc];
+    nav.modalPresentationStyle = UIModalPresentationPageSheet;
     [self.rootViewController presentViewController:nav animated:YES completion:nil];
 }
 
