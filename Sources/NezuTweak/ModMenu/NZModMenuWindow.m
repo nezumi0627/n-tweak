@@ -127,7 +127,6 @@ static const CGFloat kButtonSize   = 54.0;
     bar.backgroundColor = NZ_ACCENT_COLOR;
     [self addSubview:bar];
 
-    // マスクで角丸を復元（clipsToBounds=NO なので手動で上角だけ丸める）
     UIBezierPath *maskPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds
         byRoundingCorners:UIRectCornerTopLeft | UIRectCornerTopRight
               cornerRadii:CGSizeMake(kCornerRadius, kCornerRadius)];
@@ -171,8 +170,6 @@ static const CGFloat kButtonSize   = 54.0;
     self.tableView.separatorInset = UIEdgeInsetsMake(0, 16, 0, 0);
     self.tableView.rowHeight      = kRowHeight;
     self.tableView.showsVerticalScrollIndicator = NO;
-
-    // 下角を丸くする
     self.tableView.layer.cornerRadius   = kCornerRadius;
     self.tableView.layer.maskedCorners  =
         kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
@@ -257,7 +254,6 @@ static const CGFloat kButtonSize   = 54.0;
             return (UIWindowScene *)scene;
         }
     }
-    // フォールバック: 最初の UIWindowScene
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if ([scene isKindOfClass:[UIWindowScene class]]) {
             return (UIWindowScene *)scene;
@@ -274,16 +270,13 @@ static const CGFloat kButtonSize   = 54.0;
         if (scene) {
             instance = [[NZModMenuWindow alloc] initWithWindowScene:scene];
         } else {
-            // LC環境で scene がまだない場合の最終フォールバック
             instance = [[NZModMenuWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
         }
-        // LC の UI ウィンドウより確実に上に表示
         instance.windowLevel            = UIWindowLevelAlert + 200;
         instance.backgroundColor        = UIColor.clearColor;
         instance.rootViewController     = [UIViewController new];
         instance.rootViewController.view.backgroundColor = UIColor.clearColor;
         instance.userInteractionEnabled = YES;
-        // LC の multitask ウィンドウと干渉しないようにする
         if (@available(iOS 13.0, *)) {
             instance.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
         }
@@ -311,7 +304,6 @@ static const CGFloat kButtonSize   = 54.0;
     if (!self.menuItems) self.menuItems = [NSMutableArray array];
     if (self.menuItems.count == 0) [self setupDefaultItems];
 
-    // LC環境で scene が後から確定する場合に再アタッチ
     if (@available(iOS 13.0, *)) {
         UIWindowScene *scene = [NZModMenuWindow activeWindowScene];
         if (scene && self.windowScene != scene) {
@@ -328,15 +320,28 @@ static const CGFloat kButtonSize   = 54.0;
 - (void)buildFloatButton {
     if (self.floatButton) return;
 
-    // セーフエリアを考慮した初期位置
     CGFloat screenW = UIScreen.mainScreen.bounds.size.width;
     CGFloat x = screenW - kButtonSize - 12;
     CGFloat y = 120;
 
     // ノッチ / Dynamic Island を避ける
-    if (@available(iOS 11.0, *)) {
-        UIEdgeInsets insets = UIApplication.sharedApplication.keyWindow.safeAreaInsets;
+    // keyWindow は iOS 13 で deprecated → UIWindowScene 経由で取得
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *scene = [NZModMenuWindow activeWindowScene];
+        UIWindow *win = scene.windows.firstObject;
+        UIEdgeInsets insets = win ? win.safeAreaInsets : UIEdgeInsetsZero;
         if (insets.top > 20) y = insets.top + 60;
+    } else if (@available(iOS 11.0, *)) {
+        // iOS 11-12: keyWindow を使うが警告を明示的に抑制
+        UIApplication *app = [UIApplication sharedApplication];
+        SEL sel = NSSelectorFromString(@"keyWindow");
+        if ([app respondsToSelector:sel]) {
+            UIWindow *win = [app valueForKey:@"keyWindow"];
+            if (win) {
+                UIEdgeInsets insets = win.safeAreaInsets;
+                if (insets.top > 20) y = insets.top + 60;
+            }
+        }
     }
 
     self.floatButton = [[NZMenuButton alloc]
