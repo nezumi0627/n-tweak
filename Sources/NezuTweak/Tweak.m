@@ -13,6 +13,26 @@ typedef void (*SceneWillConnect_t)(id, SEL, UIScene *, UISceneSession *, UIScene
 static AppDidFinishLaunching_t orig_appDidFinishLaunching = NULL;
 static SceneWillConnect_t      orig_sceneWillConnect      = NULL;
 
+// ─── 最前面の ViewController を取得 (keyWindow 非使用) ────────────
+static UIViewController *NZTopViewController(void) {
+    UIWindow *win = nil;
+
+    // iOS 13+: UIWindowScene 経由
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        for (UIWindow *w in ws.windows) {
+            if (w.isKeyWindow) { win = w; break; }
+        }
+        if (!win) win = ws.windows.firstObject;
+        if (win) break;
+    }
+
+    UIViewController *vc = win.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    return vc;
+}
+
 // ─── inject 通知アラート ──────────────────────────────────────────
 static void NZShowInjectAlert(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -29,26 +49,10 @@ static void NZShowInjectAlert(void) {
                       style:UIAlertActionStyleDefault
                     handler:nil]];
 
-        // 最前面の ViewController を探して present
-        UIViewController *root = [UIApplication sharedApplication]
-            .keyWindow.rootViewController;
-        // keyWindow deprecated 対応
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    UIWindowScene *ws = (UIWindowScene *)scene;
-                    root = ws.windows.firstObject.rootViewController;
-                    break;
-                }
-            }
+        UIViewController *top = NZTopViewController();
+        if (top) {
+            [top presentViewController:alert animated:YES completion:nil];
         }
-
-        // モーダルが重なっている場合に一番上の VC を取得
-        while (root.presentedViewController) {
-            root = root.presentedViewController;
-        }
-
-        [root presentViewController:alert animated:YES completion:nil];
     });
 }
 
@@ -74,7 +78,6 @@ static BOOL hook_appDidFinishLaunching(
         ? orig_appDidFinishLaunching(self, _cmd, application, launchOptions)
         : YES;
 
-    // アプリ起動直後にアラートを表示してから ModMenu を出す
     NZShowInjectAlert();
     NZLaunchModMenu(1.2);
     return result;
@@ -133,7 +136,6 @@ static Class NZFindAppDelegateClass(void) {
             return cls;
         }
     }
-    // フォールバック: UIApplicationDelegate を実装している全クラスをスキャン
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
     Class found = nil;
@@ -144,9 +146,9 @@ static Class NZFindAppDelegateClass(void) {
             Method m = class_getInstanceMethod(cls,
                 @selector(application:didFinishLaunchingWithOptions:));
             if (m) {
-                NSString *name = NSStringFromClass(cls);
-                if (![name containsString:@"LiveContainer"] &&
-                    ![name containsString:@"LCLC"]) {
+                NSString *n = NSStringFromClass(cls);
+                if (![n containsString:@"LiveContainer"] &&
+                    ![n containsString:@"LCLC"]) {
                     found = cls;
                     break;
                 }
